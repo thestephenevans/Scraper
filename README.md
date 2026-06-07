@@ -75,8 +75,33 @@ Edit `SCRAPE_TARGETS` and `CATEGORY_PROFILES` in `config/settings.py`:
 - **`CATEGORY_PROFILES`** — per-model economics: base mint value, default parts
   cost, minimum target profit.
 - **`SCRAPE_TARGETS`** — the search URL plus the CSS selectors for the listing
-  card, title, price, link, and (optionally) description / next-page link. The
-  shipped selectors are placeholders; set them to match the live DOM.
+  card, title, price, link, and (optionally) description / next-page link. Ships
+  pointed at **books.toscrape.com**, a sandbox explicitly published for scraper
+  practice (robots-clean), so `python main.py --once` works out of the box.
+
+> ⚠️ Most real marketplaces prohibit HTML scraping in their ToS. Prefer an
+> official API (below), and only point the DOM scraper at sites whose ToS /
+> `robots.txt` permit it.
+
+### Official API sources (eBay)
+
+For real marketplace data the authorised route is an official API. The bot ships
+an **eBay Browse API** adapter (`scraper/ebay_source.py`) that pulls listings
+over HTTPS (OAuth client-credentials — no user login) and feeds them through the
+*exact same* pipeline as the DOM scraper.
+
+1. Create an app at <https://developer.ebay.com> and copy its Client ID / Secret.
+2. Put them in `.env` (`EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET`) and set
+   `EBAY_MARKETPLACE_ID` (e.g. `EBAY_GB`).
+3. Tune `EBAY_TARGETS` in `config/settings.py` (query + price/condition filters).
+
+With credentials set, eBay targets run automatically alongside any DOM targets;
+without them, the eBay source is skipped. The adapter has an offline test that
+mocks eBay's OAuth + search responses — no keys needed to run it:
+
+```bash
+.venv/bin/python tests/test_ebay_source.py
+```
 
 ---
 

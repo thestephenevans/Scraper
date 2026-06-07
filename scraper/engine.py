@@ -276,3 +276,11 @@ class ScraperEngine:
             "Target '%s' complete: %d unique listings.", target.name, len(unique)
         )
         return unique[: target.max_items]
+
+    async def collect(self, target: ScrapeTarget) -> list[ScrapedListing]:
+        """Uniform source interface (alias of :meth:`scrape_target`).
+
+        Lets the orchestrator drive this DOM scraper and the eBay API source
+        through one method name without caring which it holds.
+        """
+        return await self.scrape_target(target)

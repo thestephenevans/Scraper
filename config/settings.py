@@ -61,6 +61,32 @@ class ScrapeTarget:
     max_items: int = 60
 
 
+@dataclass(frozen=True)
+class EbayTarget:
+    """A single eBay Browse API search, plus its server-side filters.
+
+    Unlike ScrapeTarget there are no CSS selectors — the official API returns
+    structured JSON, which the eBay source maps straight into ScrapedListing.
+    `category` must match a key in CATEGORY_PROFILES so the same valuation
+    economics apply no matter where a listing came from.
+    """
+
+    category: str
+    name: str
+    query: str                               # free-text search, e.g. "iPhone 13"
+    marketplace_id: str = ""                 # "" -> Settings.ebay_marketplace_id
+    price_min: float | None = None
+    price_max: float | None = None
+    currency: str = "GBP"
+    # eBay condition enums, e.g. "NEW", "USED", "FOR_PARTS_OR_NOT_WORKING".
+    conditions: tuple[str, ...] = ()
+    buying_options: tuple[str, ...] = ("FIXED_PRICE",)
+    sort: str = ""                           # "" = Best Match; "price" = low->high
+    category_ids: str = ""                   # optional eBay category id filter
+    max_items: int = 50
+    page_delay_seconds: float = 0.2          # brief pause between paged API calls
+
+
 # Category economics. Tune base values / parts cost / target profit per model.
 CATEGORY_PROFILES: dict[str, CategoryProfile] = {
     "iphone_13": CategoryProfile(
@@ -75,23 +101,85 @@ CATEGORY_PROFILES: dict[str, CategoryProfile] = {
         default_parts_cost=60.0,
         min_target_profit=55.0,
     ),
+    # Demo profile for the books.toscrape.com sandbox (see SCRAPE_TARGETS below).
+    # Books carry no condition/repair, so this exercises the MINT path: a listing
+    # fires a BUY_SIGNAL when its price is at least `min_target_profit` below the
+    # live batch mean. Tuned against the sandbox's ~£35 mean so only the cheaper
+    # third of the catalogue trips a signal.
+    "demo_books": CategoryProfile(
+        name="books.toscrape demo",
+        base_mint_value=35.0,
+        default_parts_cost=0.0,
+        min_target_profit=12.0,
+    ),
 }
 
 
-# Scrape targets. The selectors below are placeholders — set them to match the
-# actual marketplace DOM you are authorised to scrape.
+# Scrape targets.
+#
+# The live target below points at books.toscrape.com — a sandbox published by a
+# scraping company explicitly for scraper practice. It serves no robots.txt
+# (nothing disallowed), so it is one of the few real, live sites you are
+# unambiguously authorised to scrape. Its selectors are stable and semantic, so
+# this doubles as a reference for the selector contract.
+#
+# To target a real marketplace, swap in its search URL + the CSS selectors that
+# match its listing cards — and only do so for a site whose ToS/robots.txt
+# permit it (most major marketplaces do NOT; use their official API instead).
 SCRAPE_TARGETS: list[ScrapeTarget] = [
     ScrapeTarget(
+        category="demo_books",
+        name="books.toscrape:catalogue",
+        url="https://books.toscrape.com/catalogue/page-1.html",
+        listing_selector="article.product_pod",
+        title_selector="h3 a",
+        price_selector="p.price_color",
+        link_selector="h3 a",
+        description_selector="",          # no description on the listing card
+        next_page_selector="li.next a",   # classic pagination
+        infinite_scroll=False,
+        max_items=40,                     # two pages of 20
+    ),
+    # --- Placeholder template for a real marketplace (selectors are examples) ---
+    # ScrapeTarget(
+    #     category="iphone_13",
+    #     name="example-marketplace:iphone-13",
+    #     url="https://example-marketplace.test/search?q=iphone+13",
+    #     listing_selector="[data-testid='listing-card']",
+    #     title_selector="[data-testid='listing-title']",
+    #     price_selector="[data-testid='listing-price']",
+    #     link_selector="a[data-testid='listing-link']",
+    #     description_selector="[data-testid='listing-subtitle']",
+    #     infinite_scroll=True,
+    #     max_items=60,
+    # ),
+]
+
+
+# eBay Browse API targets — used when EBAY_CLIENT_ID / EBAY_CLIENT_SECRET are set.
+# These reuse the iphone_13 / ps5 CATEGORY_PROFILES above. eBay's official API is
+# the authorised way to pull real marketplace listings: no HTML scraping, no ToS
+# breach. Conditions/prices are applied server-side; see EbayTarget for the knobs.
+EBAY_TARGETS: list[EbayTarget] = [
+    EbayTarget(
         category="iphone_13",
-        name="example-marketplace:iphone-13",
-        url="https://example-marketplace.test/search?q=iphone+13",
-        listing_selector="[data-testid='listing-card']",
-        title_selector="[data-testid='listing-title']",
-        price_selector="[data-testid='listing-price']",
-        link_selector="a[data-testid='listing-link']",
-        description_selector="[data-testid='listing-subtitle']",
-        infinite_scroll=True,
-        max_items=60,
+        name="ebay:iphone-13",
+        query="iPhone 13",
+        price_min=120,
+        price_max=420,
+        conditions=("USED", "FOR_PARTS_OR_NOT_WORKING"),
+        sort="price",          # cheapest first — surface underpriced anomalies fast
+        max_items=50,
+    ),
+    EbayTarget(
+        category="ps5",
+        name="ebay:ps5",
+        query="PlayStation 5 console",
+        price_min=150,
+        price_max=400,
+        conditions=("USED", "FOR_PARTS_OR_NOT_WORKING"),
+        sort="price",
+        max_items=50,
     ),
 ]
 
@@ -120,6 +208,17 @@ class Settings(BaseSettings):
     # --- Notifier (Discord) ---
     discord_webhook_url: str = Field(default="", alias="DISCORD_WEBHOOK_URL")
     notifier_timeout_seconds: float = Field(default=10.0, alias="NOTIFIER_TIMEOUT_SECONDS")
+
+    # --- eBay Browse API (official marketplace source) ---
+    # Application keys from https://developer.ebay.com (your app's Client ID /
+    # Client Secret). Client-credentials OAuth — no user login once approved.
+    ebay_client_id: str = Field(default="", alias="EBAY_CLIENT_ID")
+    ebay_client_secret: str = Field(default="", alias="EBAY_CLIENT_SECRET")
+    # Marketplace your queries target: EBAY_GB, EBAY_US, EBAY_DE, …
+    ebay_marketplace_id: str = Field(default="EBAY_GB", alias="EBAY_MARKETPLACE_ID")
+    # "production" once approved, or "sandbox" for the test environment.
+    ebay_env: str = Field(default="production", alias="EBAY_ENV")
+    ebay_timeout_seconds: float = Field(default=20.0, alias="EBAY_TIMEOUT_SECONDS")
 
     # --- Scraper anti-bot / resilience ---
     headless: bool = Field(default=True, alias="SCRAPER_HEADLESS")
@@ -165,6 +264,10 @@ class Settings(BaseSettings):
     @property
     def notifier_enabled(self) -> bool:
         return bool(self.discord_webhook_url)
+
+    @property
+    def ebay_enabled(self) -> bool:
+        return bool(self.ebay_client_id and self.ebay_client_secret)
 
 
 @lru_cache(maxsize=1)
